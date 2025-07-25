@@ -1,0 +1,53 @@
+name: CI/CD - Docker + ECS Fargate
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: sk963/sample-flask-app:latest
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'ap-south-1' }}
+
+      - name: Register new ECS Task Definition Revision
+        id: task-def
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition --task-definition flask-task)
+          NEW_TASK_DEF=$(echo $TASK_DEF | jq '.taskDefinition.containerDefinitions[0].image = "sk963/sample-flask-app:latest" | { family: .taskDefinition.family, containerDefinitions: [.taskDefinition.containerDefinitions[0]], requiresCompatibilities: .taskDefinition.requiresCompatibilities, networkMode: .taskDefinition.networkMode, cpu: .taskDefinition.cpu, memory: .taskDefinition.memory, executionRoleArn: .taskDefinition.executionRoleArn }')
+          echo "$NEW_TASK_DEF" > new-task-def.json
+          aws ecs register-task-definition --cli-input-json file://new-task-def.json > output.json
+          echo "task_def_arn=$(cat output.json | jq -r '.taskDefinition.taskDefinitionArn')" >> $GITHUB_ENV
+
+      - name: Update ECS Service
+        run: |
+          aws ecs update-service \
+            --cluster fargate-cluster \
+            --service flask-service \
+            --task-definition ${{ env.task_def_arn }}
