@@ -3,7 +3,7 @@ name: CI/CD - Docker + ECS Fargate
 on:
   push:
     branches:
-      - main
+      - master
 
 jobs:
   build-and-deploy:
